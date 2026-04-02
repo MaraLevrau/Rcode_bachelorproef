@@ -8,6 +8,7 @@ library(plotly)
 library(copula)
 library(PerformanceAnalytics)
 library(tidyr)
+library(dplyr)
 
 
 ## Different copulas with lognormal marginal distributions
@@ -17,25 +18,12 @@ n  <- 5000
 m <- 2
 
 # Frank's copula
-alpha <- 10
-
-
+alpha <- 55
 frankCop <- frankCopula(alpha, m)
 U1 <- rCopula(n, frankCop)
-
-X1 <- qlnorm(U1, meanlog = 0, sdlog = 1)
-
+X1 <- qnorm(U1, mean = 0, sd = 1)
 df1 <- as.data.frame(X1)
 colnames(df1) <- c("x","y")
-
-p1 <- ggplot(df1, aes(x, y)) + 
-  geom_point() + 
-  theme(axis.text.x = element_text(size = 14), axis.text.y = element_text(size = 14)) +
-  geom_point(size = .5) + 
-  xlab("X") + ylab("Y")
-
-p1
-
 
 # Gaussian copula
 correlation <- cor(U1)
@@ -43,21 +31,21 @@ rho <- correlation[1,2]
 
 gaussianCop <- normalCopula(rho, m, dispstr = "ex")
 U2 <- rCopula(n, gaussianCop)
-
-X2 <- qlnorm(U2, meanlog = 0, sdlog = 1)
-
-
+X2 <- qnorm(U2, mean = 0, sd = 1)
 df2 <- as.data.frame(X2)
 colnames(df2) <- c("x","y")
 
-
-p2 <- ggplot(df2, aes(x, y)) + 
-  geom_point() + 
+# we voegen df1 en df2 samen
+df1$Copula <- "Frank's"
+df2$Copula <- "Gaussian"
+df <- rbind(df1, df2)
+ggplot(df, aes(x, y, color = Copula)) + 
+  geom_point(size = .5) + 
   theme(axis.text.x = element_text(size = 14), axis.text.y = element_text(size = 14)) +
-  geom_point(size = .5) +
-  xlab("X") + ylab("Y")
-
-p2
+  xlab("X") + ylab("Y") +
+  scale_color_manual(values = c("darkred", "steelblue")) +
+  labs(color = "Copula type") +
+  theme(legend.title = element_text(size = 14), legend.text = element_text(size = 12))
 
 
 ## Aggregate loss with different copula's 
@@ -101,46 +89,52 @@ var2 <- quantile(S2, 0.99)
 tvar2 <- mean(S2[S2 > var2])
 
 
-
 ## Value at risk and Tail value at risk
 
-n  <- 10000
+n  <- 25000
 m <- 10
+repetitions <- 50
 
 rho <- seq(0, 0.99, 0.05)
-results <- data.frame(rho = rho, VaR = NA, TVaR = NA)
+results <- data.frame()
 
 for (r in 1:length(rho)){
-  corr_matrix <- matrix(rho[r], m, n)
-  diag(corr_matrix) <- 1
-  
-  gaussianCop <- normalCopula(rho[r], m, dispstr = "ex")
-  U <- rCopula(n, gaussianCop)
-  X <- qlnorm(U, meanlog = 0, sdlog = 1)
-  S <- rowSums(X)
-  
-  var <- quantile(S, 0.99)
-  results$VaR[r] <- var
-  results$TVaR[r] <- mean(S[S > var])
-  
+  for (repetition in 1:repetitions) {
+    gaussianCop <- normalCopula(rho[r], m, dispstr = "ex")
+    U <- rCopula(n, gaussianCop)
+    X <- qlnorm(U, meanlog = 0, sdlog = 1)
+    S <- rowSums(X)
+    
+    var <- quantile(S, 0.99)
+    tvar <- mean(S[S > var])
+    
+    results <- rbind(results, data.frame(rho = rho[r], repetition = repetition, VaR = var, TVaR = tvar))
+  }
 }
 
-p1 <- ggplot(results, aes(x = rho, y = VaR)) +
-  geom_line(color = "steelblue", linewidth = 1) +
+summary_df <- results %>%
+  group_by(rho) %>%
+  summarise(min_VaR = min(VaR), max_VaR = max(VaR), mean_VaR = mean(VaR),
+            min_TVaR = min(TVaR), max_TVaR = max(TVaR), mean_TVaR = mean(TVaR))
+
+p1 <- ggplot() +
+  geom_line(data=results, aes(x=rho, y=VaR, group=repetition), alpha=0.3, color="gray") +
+  geom_ribbon(data=summary_df, aes(x=rho, ymin=min_VaR, ymax=max_VaR), alpha=0.3, fill="lightblue") +
+  geom_line(data=summary_df, aes(x=rho, y=mean_VaR), color="black", linewidth=1.5) +
   labs(
     x = expression(Correlation),
-    y = "Value at risk"
+    y = "Value at risk (q = 0.99)"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 16)
 p1
 
-p2 <- ggplot(results, aes(x = rho, y = TVaR)) +
-  geom_line(color = "darkred", linewidth = 1) +
+p2 <- ggplot() +
+  geom_line(data=results, aes(x=rho, y=TVaR, group=repetition), alpha=0.3, color="gray") +
+  geom_ribbon(data=summary_df, aes(x=rho, ymin=min_TVaR, ymax=max_TVaR), alpha=0.3, fill="lightcoral") +
+  geom_line(data=summary_df, aes(x=rho, y=mean_TVaR), color="black", linewidth=1.5) +
   labs(
     x = expression(Correlation),
-    y = "Tail value at risk"
+    y = "Tail value at risk (q = 0.99)"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 16)
 p2
-
-
