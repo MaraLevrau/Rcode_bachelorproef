@@ -53,29 +53,9 @@ ggplot(df, aes(x, y, color = Copula)) +
 n  <- 10000
 m <- 100
 
-# Frank's copula
-alpha    <- 10
+rho <- 0.7
 
-frankCop <- frankCopula(alpha, m)
-U1 <- rCopula(n, frankCop)
-
-X1 <- qlnorm(U1, meanlog = 0, sdlog = 1)
-S1 <- rowSums(X1)
-
-ggplot(data.frame(S1), aes(S1)) +
-  geom_histogram(bins = 60, fill = "darkred", color = "white") +
-  labs(x = "Total Loss S",
-       y = "Frequency")
-
-
-var1 <- quantile(S1, 0.99)
-tvar1 <- mean(S1[S1 > var1])
-
-# Gaussian copula
-
-corr <- cor(U1)
-
-gaussianCop <- normalCopula(param = P2p(corr), dim = m, dispstr = "un")
+gaussianCop <- normalCopula(rho, m, dispstr = "ex")
 U2 <- rCopula(n, gaussianCop)
 
 X2 <- qlnorm(U2, meanlog = 0, sdlog = 1)
