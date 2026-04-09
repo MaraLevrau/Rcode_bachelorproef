@@ -14,7 +14,7 @@ library(dplyr)
 ## Different copulas with lognormal marginal distributions
 
 
-n  <- 5000
+n  <- 50000
 m <- 2
 
 # Frank's copula
@@ -35,10 +35,11 @@ X2 <- qnorm(U2, mean = 0, sd = 1)
 df2 <- as.data.frame(X2)
 colnames(df2) <- c("x","y")
 
-# we voegen df1 en df2 samen
 df1$Copula <- "Frank's"
 df2$Copula <- "Gaussian"
 df <- rbind(df1, df2)
+df <- df[sample(nrow(df)), ] # shuffle the rows to avoid any ordering effects in the plot
+
 ggplot(df, aes(x, y, color = Copula)) + 
   geom_point(size = .5) + 
   theme(axis.text.x = element_text(size = 14), axis.text.y = element_text(size = 14)) +
