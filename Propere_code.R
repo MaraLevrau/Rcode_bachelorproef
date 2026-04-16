@@ -11,6 +11,7 @@ library(tidyr)
 library(dplyr)
 
 
+
 ## Different copulas with lognormal marginal distributions
 
 
@@ -57,20 +58,28 @@ m <- 100
 rho <- 0.7
 
 gaussianCop <- normalCopula(rho, m, dispstr = "ex")
-U2 <- rCopula(n, gaussianCop)
+U <- rCopula(n, gaussianCop)
 
-X2 <- qlnorm(U2, meanlog = 0, sdlog = 1)
-S2 <- rowSums(X2)
+X <- qlnorm(U, meanlog = 0, sdlog = 1)
+S <- rowSums(X)
 
-ggplot(data.frame(S2), aes(S2)) +
+var <- quantile(S, 0.99)
+tvar <- mean(S[S > var])
+
+ggplot(data.frame(S), aes(S)) +
   geom_histogram(bins = 60, fill = "darkred", color = "white") +
-  labs(x = "Total Loss S",y = "Frequency")
+  geom_vline(aes(xintercept = var, color = "VaR 0.99"), linewidth = 0.5) +
+  geom_vline(aes(xintercept = tvar, color = "TVaR 0.99"), linewidth = 0.5) +
+  scale_color_manual(values = c("VaR 0.99" = "steelblue", "TVaR 0.99" = "palevioletred")) +
+  labs(x = "Total Loss S", y = "Frequency", color = "Risk Measure") + 
+  theme(legend.position = c(1, 1), legend.justification = c(1, 1))
 
-var2 <- quantile(S2, 0.99)
-tvar2 <- mean(S2[S2 > var2])
 
 
-## Value at risk and Tail value at risk
+
+
+
+## Value-at-risk and Tail value-at-risk
 
 n  <- 25000
 m <- 10
@@ -104,7 +113,7 @@ p1 <- ggplot() +
   geom_line(data=summary_df, aes(x=rho, y=mean_VaR), color="black", linewidth=1.5) +
   labs(
     x = expression(Correlation),
-    y = "Value at risk (q = 0.99)"
+    y = "Value-at-Risk (q = 0.99)"
   ) +
   theme_minimal(base_size = 16)
 p1
@@ -115,7 +124,7 @@ p2 <- ggplot() +
   geom_line(data=summary_df, aes(x=rho, y=mean_TVaR), color="black", linewidth=1.5) +
   labs(
     x = expression(Correlation),
-    y = "Tail value at risk (q = 0.99)"
+    y = "Tail Value-at-Risk (q = 0.99)"
   ) +
   theme_minimal(base_size = 16)
 p2
