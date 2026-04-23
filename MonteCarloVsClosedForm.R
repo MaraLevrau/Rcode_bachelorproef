@@ -4,10 +4,16 @@ library(microbenchmark)
 library(gridExtra)
 library(tidyr)
 library(dplyr)
+library(patchwork)
+library(broman)
 
 runAll <- function(
     trials, 
     n, 
+    μRange = list(min = -1, max = 1),
+    σRange = list(min = 0, max = 1),
+    μGiven = NULL,
+    σGiven = NULL,
     pValues = seq(0, 0.99, by = 0.01), 
     microbenchmarkControl = list(warmup = 20, replications = 50), 
     optimiseBeta = FALSE,
@@ -30,14 +36,29 @@ runAll <- function(
   Unif <- rCopula(trials, gaussianCopula)
   
   # Get some interesting parameters for the lognormal distributions
-  μ = runif(n, min = -1, max = 1)
-  σ = runif(n, min =  0, max = 1)
+  if (is.null(μGiven)) {
+    μ = runif(n, min = μRange$min, max = μRange$max)
+  } else {
+    μ = μGiven
+  }
+  
+  if (is.null(σGiven)) {
+    σ = runif(n, min = σRange$min, max = σRange$max)
+  } else {
+    σ = σGiven
+  }
   
   multivariateDist <- mvdc(
     copula = gaussianCopula,
     margins = rep("lnorm", n),
     paramMargins = lapply(1:n, function(i) list(meanlog = μ[i], sdlog = σ[i]))
   )
+  
+  samplingTime <- summary(microbenchmark(
+    rMvdc(trials, multivariateDist), 
+    unit = "us", 
+    control = microbenchmarkControl
+  ))
   
   Y <- rMvdc(trials, multivariateDist)
   S <- rowSums(Y)
@@ -175,7 +196,9 @@ runAll <- function(
       exp(b + σ[i] * ρ[i] * qnorm(p))
     })), unit = "us", control = microbenchmarkControl)
     
-    VaR_monteCarlo = quantile(S, p)
+    quantileEstimation <- quantileSE(S, p)
+    
+    VaR_monteCarlo = quantileEstimation[[1]]
     VaR_closedForm = sum(sapply(1:n, function (i) {
       b = μ[i] + 0.5 * (1 - ρ[i]^2) * σ[i]^2
       exp(b + σ[i] * ρ[i] * qnorm(p))
@@ -186,12 +209,14 @@ runAll <- function(
       MC = VaR_monteCarlo, 
       CF = VaR_closedForm,
       
-      MCTimeMin = summary(mc)$min,
+      MCTimeMin = summary(mc)$min + samplingTime$min,
       CFTimeMin = summary(cf)$min,
-      MCTimeAvg = summary(mc)$mean,
+      MCTimeAvg = summary(mc)$mean + samplingTime$mean,
       CFTimeAvg = summary(cf)$mean,
-      MCTimeMax = summary(mc)$max,
-      CFTimeMax = summary(cf)$max
+      MCTimeMax = summary(mc)$max + samplingTime$max,
+      CFTimeMax = summary(cf)$max,
+      
+      MCError = quantileEstimation[[2]]
     ))
     
     setTxtProgressBar(progress, p)
@@ -248,20 +273,43 @@ ggplot(execution_times, aes(x = trials)) +
 # We can also look at individual calculation times in more detail
 
 df <- runAll(
-  trials = 1e4, 
+  trials = 2.5e2, 
   n = 10, 
-  pValues = seq(0, 0.99, by = 0.01), 
-  microbenchmarkControl = list(warmup = 20, replications = 100),
+  pValues = seq(0.01, 0.99, by = 0.005), 
+  σRange = list(min = 0, max = 0.1),
+  microbenchmarkControl = list(warmup = 0, replications = 0),
   optimiseBeta = FALSE)
 
-ggplot(df, aes(x = pLevel)) +
+ggplot(subset(df, pLevel > 0.8), aes(x = pLevel)) +
   geom_line(aes(y = MC, color = "Monte Carlo")) +
   geom_line(aes(y = CF, color = "Closed Form")) +
+  
+  geom_line(aes(y = MC - MCError, color = "Monte Carlo (lower bound)"), linetype = "dashed") +
+  geom_line(aes(y = MC + MCError, color = "Monte Carlo (upper bound)"), linetype = "dashed") +
+  
+  geom_ribbon(aes(ymin = MC - 2 * MCError, ymax = MC + 2 * MCError, fill = "Monte Carlo"), alpha = 0.2) +
+  geom_ribbon(aes(ymin = MC - MCError, ymax = MC + MCError, fill = "Monte Carlo"), alpha = 0.2) +
 # geom_point(data = cfExceedsMc, aes(y = CF)) +
   labs(x = "Probability level p", y = "VaR_p") +
-  scale_color_manual(values = c("steelblue", "red")) +
+  scale_color_manual(values = c("steelblue", "red", "red", "red")) +
   theme(legend.title = element_blank()) + 
   theme_minimal()
+
+stErrDeviation <- df %>%
+  select(MC, CF, MCError, pLevel) %>%
+  filter(MCError != 0) %>%
+  mutate(StdErrDev = (CF - MC) / MCError)
+
+maxDev = max(stErrDeviation$StdErrDev)  
+
+ggplot(data = stErrDeviation, aes(x = pLevel)) +
+  geom_line(aes(y = StdErrDev)) + 
+  geom_abline(intercept = 1, slope = 0, linetype = "dashed") + 
+  geom_abline(intercept = -1, slope = 0, linetype = "dashed") +
+  ylim(-maxDev, maxDev) + 
+  geom_ribbon(aes(ymin=1, ymax=maxDev), fill="red", alpha=0.2) + 
+  geom_ribbon(aes(ymin=-maxDev, ymax=-1), fill="red", alpha=0.2)
+  
 
 differences <- df %>%
   mutate(Difference = MC - CF) %>%
@@ -300,3 +348,59 @@ gridDF <- runAll(
   microbenchmarkControl = list(warmup = 20, replications = 100),
   inspectCorrelation = list(from = 0.5, to = 10, by = 0.15)
 )
+
+# by running a very large Monte Carlo simulation, we can get a very good
+# estimate of the true VaR for a given set of parameters, and then we can
+# compare the closed form estimate to that to see how well it performs for 
+# different ranges of σ
+σRangePlots <- list()
+n = 20
+μValues = runif(n, min = -2, max = 2)
+pValues = seq(0.1, 0.9, by = 0.05)
+
+rows = 3
+cols = 4
+σMin = 0.1
+σMax = 5
+diff = (σMax - σMin) / (rows * cols)
+
+for (σRangeMax in seq(σMin, σMax - diff, by = diff)) {
+  message(sprintf("Running for σ range max = %f", σRangeMax))
+  σValues = runif(n, min = σRangeMax, max = σRangeMax + diff)
+  
+  accurateMCResult <- runAll(
+    trials = 1e6, 
+    n = n, 
+    pValues = pValues, 
+    microbenchmarkControl = list(warmup = 0, replications = 0),
+    μGiven = μValues,
+    σGiven = σValues
+  )
+  
+  accurateMCResult <- select(accurateMCResult, pLevel, MC)
+  
+  CFResult <- runAll(
+    trials = 1e4,
+    n = n,
+    pValues = pValues,
+    microbenchmarkControl = list(warmup = 0, replications = 0),
+    μGiven = μValues,
+    σGiven = σValues
+  )
+  
+  CFResult <- select(CFResult, pLevel, CF)
+  
+  comparison <- merge(accurateMCResult, CFResult, by = "pLevel") %>%
+    mutate(σRangeMax = σRangeMax)
+  
+  plot <- ggplot(data = comparison, aes(x = pLevel)) + 
+    geom_line(aes(y = MC, color = "Monte Carlo"), linewidth = 1) +
+    geom_line(aes(y = CF, color = "Closed form"), linewidth = 1) + 
+    labs(title = sprintf("σ ∈ [%.2f, %.2f]", σRangeMax, σRangeMax + diff), y = NULL, x = NULL)
+  
+  σRangePlots[[length(σRangePlots) + 1]] <- plot
+}
+
+wrap_plots(σRangePlots, ncol = 4, guides = "collect") + 
+  plot_annotation(title = "Comparison of Monte Carlo and Closed Form VaR estimates for different σ ranges") &
+  theme(legend.position = "bottom", legend.title = element_blank())
