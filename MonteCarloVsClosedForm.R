@@ -230,13 +230,13 @@ runAll <- function(
 }
 
 execution_times <- data.frame()
-avgRuns <- 1
+avgRuns <- 3
 for (trials in seq(10e4, 10e6, by = 10e4)) {
   mcTimes <- numeric(avgRuns)
   cfTimes <- numeric(avgRuns)
   
   for (i in 1:avgRuns) {
-    result <- runAll(trials = trials, n = 5, pValues = seq(0.1, 0.9, by = 0.1))
+    result <- runAll(trials = trials, n = 10, pValues = seq(0.1, 0.9, by = 0.1))
     mcTimes[i] <- mean(result$MCTimeAvg)
     cfTimes[i] <- mean(result$CFTimeAvg)
   }
@@ -259,21 +259,32 @@ ggplot(speedup, aes(x = trials)) +
   labs(title = "Speedup of Closed Form over Monte Carlo", x = "Number of trials", y = "Speedup (Closed Form Time / Monte Carlo Time)") +
   theme_minimal()
 
-ggplot(execution_times, aes(x = trials)) +
-  geom_line(aes(y = MCTimeAvg, colour = "Monte Carlo")) +
-  geom_line(aes(y = CFTimeAvg, colour = "Closed Form")) +
-  geom_ribbon(aes(ymin = MCTimeMin, ymax = MCTimeMax, fill = "Monte Carlo"), alpha = 0.2) +
-  geom_ribbon(aes(ymin = CFTimeMin, ymax = CFTimeMax, fill = "Closed Form"), alpha = 0.2) +
-  labs(title = "Average computation time for Monte Carlo vs. Closed Form (sample size 1e6)", x = "Number of trials", y = "Average Time (μs)") +
+# split the plot into two subplots to better visualize the time ranges
+pivoted <- execution_times %>%
+  pivot_longer(
+    cols = -trials,
+    names_to = c("Method", ".value"),
+    names_pattern = "(MC|CF)Time(Min|Avg|Max)"
+  )
+
+pivoted$Method <- recode(pivoted$Method,
+                         MC = "Monte Carlo",
+                         CF = "Closed Form")
+
+ggplot(pivoted, aes(x = trials)) +
+  geom_line(aes(y = Avg, colour = Method)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max, fill = Method), alpha = 0.2) +
+  labs(title = "Average computation time for Closed form vs. Monte Carlo (sample size 1e6)", x = "Number of trials", y = "Average Time (μs)") +
   theme_minimal() +
-  theme(legend.title = element_blank())
+  theme(legend.position = "none") + 
+  facet_wrap(~Method, scales = "free_y")
 
 
 
 # We can also look at individual calculation times in more detail
 
 df <- runAll(
-  trials = 2.5e2, 
+  trials = 2.5e5, 
   n = 10, 
   pValues = seq(0.01, 0.99, by = 0.005), 
   σRange = list(min = 0, max = 0.1),
