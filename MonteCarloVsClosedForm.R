@@ -7,9 +7,20 @@ library(dplyr)
 library(patchwork)
 library(broman)
 
+generateCorrelationMatrix <- function(n) {
+  # We first generate a correlation matrix:
+  Loadings <- matrix(runif(n^2, 0, 1), nrow = n)
+  Symm <- Loadings %*% t(Loadings)
+  D <- diag(1 / sqrt(diag(Symm)))
+  
+  D %*% Symm %*% D
+}
+
 runAll <- function(
     trials, 
     n, 
+    correlationMatrix = NULL,
+    βGiven = NULL,
     μRange = list(min = -1, max = 1),
     σRange = list(min = 0, max = 1),
     μGiven = NULL,
@@ -20,14 +31,10 @@ runAll <- function(
     inspectCorrelation = NULL) {
   message(sprintf("Running with %d trials and %d dimensions", trials, n))
   
-  # We first generate a correlation matrix:
-  {
-    Loadings <- matrix(runif(n^2, 0, 1), nrow = n)
-    Symm <- Loadings %*% t(Loadings)
-    D <- diag(1 / sqrt(diag(Symm)))
-    
-    R <- D %*% Symm %*% D # standardize to correlation matrix
-    rm(Loadings, Symm, D)
+  if (is.null(correlationMatrix)) {
+    R <- generateCorrelationMatrix(n)
+  } else {
+    R <- correlationMatrix
   }
   
   gaussianCopula <- normalCopula(param = R[lower.tri(R)],
@@ -97,11 +104,14 @@ runAll <- function(
   
   # since we chose the correlation matrix to be positive definite, any choice of
   # β's with ∀ i: βᵢ > 0 will lead to a positive correlation between Y and Λ.
-  
-  if (optimiseBeta) {
-    β <- findBestβ(rep(1, n), rep(5, n), 3, 5)
+  if (is.null(βGiven)) {
+    if (optimiseBeta) {
+      β <- findBestβ(rep(1, n), rep(5, n), 3, 5)
+    } else {
+      β <- runif(n, min = 1, max = 2)
+    }
   } else {
-    β = runif(n, min = 1, max = 2)
+    β <- βGiven
   }
   
   # The following is debug code to draw a heatmap for correlations associated with β's 
@@ -284,7 +294,7 @@ ggplot(pivoted, aes(x = trials)) +
 # We can also look at individual calculation times in more detail
 
 df <- runAll(
-  trials = 2.5e5, 
+  trials = 2.5e2, 
   n = 10, 
   pValues = seq(0.01, 0.99, by = 0.005), 
   σRange = list(min = 0, max = 0.1),
@@ -415,3 +425,39 @@ for (σRangeMax in seq(σMin, σMax - diff, by = diff)) {
 wrap_plots(σRangePlots, ncol = 4, guides = "collect") + 
   plot_annotation(title = "Comparison of Monte Carlo and Closed Form VaR estimates for different σ ranges") &
   theme(legend.position = "bottom", legend.title = element_blank())
+
+## Let's inspect the way β's affect the predictions
+
+βComparisonDf <- data.frame()
+
+R <- generateCorrelationMatrix(3)
+
+μ = runif(3, min = -1, max = 1)
+σ = runif(3, min =  0, max = 1)
+
+pValues <- seq(0.01, 0.99, by = 0.005)
+betas <- tibble(names= c("β1", "β2", "β3"), comp1 = c(5, 1, 1), comp2 = c(1, 5, 1), comp3 = c(1, 1, 5))
+
+for (i in 1:nrow(betas)) {
+  β = c(betas$comp1[i], betas$comp2[i], betas$comp3[i])
+  
+  result <- runAll(
+    trials = 1e6, 
+    n = 3, 
+    pValues = pValues, 
+    microbenchmarkControl = list(warmup = 0, replications = 0),
+    μGiven = μ,
+    σGiven = σ,
+    βGiven = β,
+    correlationMatrix = R
+  ) %>%
+    select(pLevel, MC, CF) %>%
+    mutate(βName = betas$names[i])
+  
+  βComparisonDf <- rbind(βComparisonDf, result)
+}
+
+βComparisonDf <- βComparisonDf %>%
+  pivot_wider(names_from = βName, values_from = c(MC, CF)) %>%
+  select(pLevel, "MC_β1", starts_with("CF")) %>%
+  rename(MC = MC_β1)
