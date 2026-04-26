@@ -40,7 +40,6 @@ runAll <- function(
   gaussianCopula <- normalCopula(param = R[lower.tri(R)],
                                  dim = n,
                                  dispstr = "un")
-  Unif <- rCopula(trials, gaussianCopula)
   
   # Get some interesting parameters for the lognormal distributions
   if (is.null(μGiven)) {
@@ -435,29 +434,88 @@ R <- generateCorrelationMatrix(3)
 μ = runif(3, min = -1, max = 1)
 σ = runif(3, min =  0, max = 1)
 
-pValues <- seq(0.01, 0.99, by = 0.005)
+pValues <- seq(0.01, 0.99, by = 0.001)
 betas <- tibble(names= c("β1", "β2", "β3"), comp1 = c(5, 1, 1), comp2 = c(1, 5, 1), comp3 = c(1, 1, 5))
 
-for (i in 1:nrow(betas)) {
+gaussianCopula <- normalCopula(param = R[lower.tri(R)], dim = 3, dispstr = "un")
+
+multivariateDist <- mvdc(
+  copula = gaussianCopula,
+  margins = rep("lnorm", 3),
+  paramMargins = lapply(1:3, function(i) list(meanlog = μ[i], sdlog = σ[i]))
+)
+
+Y <- rMvdc(100, multivariateDist)
+
+for (i in 1:3) {
   β = c(betas$comp1[i], betas$comp2[i], betas$comp3[i])
   
-  result <- runAll(
-    trials = 1e6, 
-    n = 3, 
-    pValues = pValues, 
-    microbenchmarkControl = list(warmup = 0, replications = 0),
-    μGiven = μ,
-    σGiven = σ,
-    βGiven = β,
-    correlationMatrix = R
-  ) %>%
-    select(pLevel, MC, CF) %>%
-    mutate(βName = betas$names[i])
+  {
+    # theoretical covariance between Yᵢ and Yⱼ:
+    tCov <- function(i, j) {
+      exp(μ[i] + μ[j] + 0.5 * (σ[i]^2 + σ[j]^2)) * (exp(R[i, j] * σ[i] * σ[j]) - 1)
+    }
+    
+    # Theoretical correlation between Y and Λ, making use of the fact that Cov is a bilinear form:
+    VarΛ = sum(sapply(1:3, function(i) {
+      sum(sapply(1:3, function(j) { β[i] * β[j] * tCov(i, j) }))
+    }))
+    
+    ρ = sapply(1:3, function(i) {
+      nom = sum(sapply(1:3, function(j) { β[j] * tCov(i, j) }))
+      den = sqrt(tCov(i, i) * VarΛ)
+      nom / den
+    })
+    
+    rm(tCov, VarΛ)
+  }
+  
+  # covariance size
+  euclNorm <- sqrt(sum(ρ^2))
+  message(sprintf("beta %s : cov %f", betas$names[i], euclNorm))
+  result <- data.frame()
+  for (p in pValues) {
+    VaR_closedForm = sum(sapply(1:3, function (i) {
+      b = μ[i] + 0.5 * (1 - ρ[i]^2) * σ[i]^2
+      exp(b + σ[i] * ρ[i] * qnorm(p))
+    }))
+    
+    result <- rbind(result, list(
+      pLevel = p, 
+      CF = VaR_closedForm
+    ))
+    
+  }
   
   βComparisonDf <- rbind(βComparisonDf, result)
 }
 
-βComparisonDf <- βComparisonDf %>%
-  pivot_wider(names_from = βName, values_from = c(MC, CF)) %>%
-  select(pLevel, "MC_β1", starts_with("CF")) %>%
-  rename(MC = MC_β1)
+MCValues <- runAll(
+  trials = 1e6, 
+  n = 3, 
+  pValues = pValues, 
+  microbenchmarkControl = list(warmup = 0, replications = 0),
+  μGiven = μ,
+  σGiven = σ,
+  βGiven = β,
+  correlationMatrix = R
+) %>% select(pLevel, MC)
+
+βComparisonDfMerged <- βComparisonDf %>%
+  pivot_wider(names_from = βName, values_from = c(CF)) %>%
+  merge(MCValues, by = "pLevel") %>%
+  mutate(Δβ1 = MC - β1, Δβ2 = MC - β2, Δβ3 = MC - β3) %>%
+  select(pLevel, MC, Δβ1, Δβ2, Δβ3)
+
+sum(abs(βComparisonDfMerged$Δβ1))
+sum(abs(βComparisonDfMerged$Δβ2))
+sum(abs(βComparisonDfMerged$Δβ3))
+
+ggplot(βComparisonDfMerged, aes(x = pLevel)) +
+  geom_line(aes(y = Δβ1, color = "β₁"), linewidth = 1) + 
+  geom_line(aes(y = Δβ2, color = "β₂"), linewidth = 1) + 
+  geom_line(aes(y = Δβ3, color = "β₃"), linewidth = 1) + 
+  geom_abline(aes(intercept = 0, slope = 0), linetype = "dashed", color = "black") +
+  labs(title = "Comparison of Monte Carlo and Closed Form VaR estimates for different β's", y = "VaR", x = "Probability level p") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
