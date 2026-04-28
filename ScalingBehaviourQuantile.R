@@ -16,9 +16,9 @@ progress <- txtProgressBar(
   style = 3,
   char = "#")
 
-for (n in seq(1e4, 1e6, by = 1e4)) {
+for (n in seq(1e4, 1e6, by = 2e4)) {
   sample <- runif(n)
-  benchmark <- microbenchmark(quantile(sample, 0.5), times = 1000)
+  benchmark <- microbenchmark(mean(sample[sample > quantile(sample, 0.5)]), times = 1000)
   times <- rbind(times, data.frame(n = n, time = mean(benchmark$time)))
   setTxtProgressBar(progress, n)
 }
